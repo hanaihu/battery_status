@@ -1,0 +1,37 @@
+# Build output
+build/
+bin/
+obj/
+out/
+*.exe
+*.dll
+*.o
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.res
+
+# Visual Studio / MSVC
+.vs/
+*.vcxproj.user
+*.sln.cache
+ipch/
+
+# CMake / Make
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.local
+
+# Editors
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+desktop.ini
