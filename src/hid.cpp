@@ -122,12 +122,14 @@ bool HidDevice::Read(void* buffer, DWORD length, DWORD* bytesRead, DWORD timeout
     if (!IsOpen()) return false;
     ResetEvent(overlapped_.hEvent);
     DWORD received = 0;
-    if (!ReadFile(handle_, buffer, length, nullptr, &overlapped_)) {
-        if (GetLastError() != ERROR_IO_PENDING) return false;
-        if (!WaitFor(handle_, overlapped_, timeoutMs, &received)) return false;
-    } else {
+    if (ReadFile(handle_, buffer, length, nullptr, &overlapped_)) {
+        // Completed synchronously: the result is already available.
         GetOverlappedResult(handle_, &overlapped_, &received, FALSE);
+        if (bytesRead != nullptr) *bytesRead = received;
+        return true;
     }
+    if (GetLastError() != ERROR_IO_PENDING) return false;
+    if (!WaitFor(handle_, overlapped_, timeoutMs, &received)) return false;
     if (bytesRead != nullptr) *bytesRead = received;
     return true;
 }

@@ -14,8 +14,8 @@
 namespace {
 
 constexpr DWORD kWriteTimeoutMs = 250;
-constexpr DWORD kReadTimeoutMs = 250;
-constexpr int kReadAttempts = 8;
+constexpr DWORD kReadSliceMs = 200;
+constexpr DWORD kReplyBudgetMs = 1500;  // a sleeping device needs the receiver to wake it over RF
 
 constexpr unsigned char kFirstDeviceIndex = 1;
 constexpr unsigned char kLastDeviceIndex = 6;
@@ -38,23 +38,37 @@ struct Link {
         }
         if (!device.Write(request, outputLength, kWriteTimeoutMs)) return false;
 
-        for (int attempt = 0; attempt < kReadAttempts; ++attempt) {
+        const unsigned long long deadline = GetTickCount64() + kReplyBudgetMs;
+        bool announcedTimeout = false;
+        while (GetTickCount64() < deadline) {
             unsigned char buffer[64]{};
             DWORD received = 0;
-            if (!device.Read(buffer, inputLength, &received, kReadTimeoutMs)) return false;
-            if (received < 6) continue;
+            const unsigned long long remaining = deadline - GetTickCount64();
+            const DWORD slice = remaining < kReadSliceMs ? static_cast<DWORD>(remaining) : kReadSliceMs;
+            if (!device.Read(buffer, inputLength, &received, slice)) {
+                if (trace && !announcedTimeout) {
+                    std::printf("      (waiting for the receiver)\n");
+                    announcedTimeout = true;
+                }
+                continue;
+            }
+            if (received < 6) {
+                if (trace) std::printf("      < %s  (too short)\n", HexDump(buffer, received).c_str());
+                continue;
+            }
 
             const hidpp::Reply candidate = hidpp::ParseReply(buffer, static_cast<int>(received));
-            if (candidate.kind == hidpp::ReplyKind::NoReply) continue;
-            if (candidate.device != dev) continue;
-            if (candidate.subId != subId && candidate.address != subId) continue;
-
+            const bool matched = candidate.kind != hidpp::ReplyKind::NoReply && candidate.device == dev &&
+                                 (candidate.subId == subId || candidate.address == subId);
             if (trace) {
-                std::printf("      < %s\n", HexDump(buffer, received).c_str());
+                std::printf("      < %s  %s\n", HexDump(buffer, received).c_str(), matched ? "" : "(not for us)");
             }
+            if (!matched) continue;
+
             reply = candidate;
             return true;
         }
+        if (trace) std::printf("      (no reply within %u ms)\n", kReplyBudgetMs);
         return false;
     }
 };
