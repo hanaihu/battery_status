@@ -33,11 +33,11 @@ a small, dependency-free C++/Win32 app.
 | 模块 | 状态 |
 |---|---|
 | 项目文档、技术选型 | ✅ 完成 |
-| 设备探测工具（`--dump`） | 📋 计划中 |
+| 设备探测工具（`--dump`） | ✅ 可运行；罗技电量读取待真机验证 |
 | 托盘图标（数据展示） | 📋 计划中 |
 | 任务栏常驻文字 | 📋 计划中 |
 | 设置项 / 开机自启 | 📋 计划中 |
-| 厂商私有协议 | 📋 计划中 |
+| 厂商私有协议 | 🚧 罗技 HID++ 已实现，其余按需 |
 
 ---
 
@@ -123,20 +123,40 @@ src/
 
 ## 构建
 
-计划支持 MSVC 与 MinGW-w64 两种工具链，产物为**单个 exe，无运行时依赖，无需管理员权限**。
+两套工具链编译同一份源码，但只有一套用于发布：
+
+| 工具链 | 用途 | 产物 |
+|---|---|---|
+| **MSVC**（`/MT`） | **发布** | 约 190 KB，无 CRT 依赖 |
+| MinGW-w64（`-static`） | 日常迭代 | 约 700 KB，仅本地使用 |
 
 ```powershell
-# 依赖：MSVC (Visual Studio Build Tools) 或 MinGW-w64
-build.bat            # 或 make
+# 发布构建：自动定位 Visual Studio 并调用 vcvars64
+.\build.bat
+
+# 开发构建
+mingw32-make
+mingw32-make test
 ```
 
-> 代码尚未落地，此节会在 M1 之后补全实际命令。
+产物在 `build\`。命令行选项：
+
+```
+battery_status --dump              # 列出所有能读到电量的设备
+battery_status --dump --verbose    # 附上 provider 的诊断信息
+battery_status --dump --raw        # 打印每一个 HID++ 报文
+```
+
+> 同样源码，MinGW 产物比 MSVC 大约 500 KB，主要来自静态链接的 libstdc++。
+> 这也是"发布用 MSVC、迭代用 MinGW"的原因。
+
+罗技 HID++ 的报文布局，以及"哪些已验证、哪些仍是假设"，记录在 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)。
 
 ---
 
 ## 路线图
 
-- [ ] **M0 — 探测**：`battery_status --dump` 打印所有候选设备与读到的电量，用于验证可行性
+- [x] **M0 — 探测**：`battery_status --dump` 打印所有候选设备与读到的电量，用于验证可行性
 - [ ] **M1 — 托盘**：托盘图标内绘制百分比，点击列出所有设备
 - [ ] **M2 — 任务栏**：分层子窗口常驻显示，含副屏镜像与 explorer 重启恢复
 - [ ] **M3 — 打磨**：深色/浅色主题、DPI 缩放、开机自启、配置持久化、低电量通知
