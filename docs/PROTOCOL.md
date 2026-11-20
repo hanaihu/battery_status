@@ -1,108 +1,102 @@
 # Logitech HID++ notes
 
-Everything below was observed on a `046D:C547` receiver on Windows 11 build 26200,
-or is marked as assumed. Assumptions are kept explicit so the first run against a
-real device can confirm or correct them.
+Everything below was observed on a `046D:C547` receiver with a Logitech
+2.4 GHz mouse, Windows 11 build 26200, or is marked as assumed.
 
 ## Transport
 
 The receiver exposes two vendor collections:
 
-| Collection | Report size | Behaviour |
+| Collection | Report size | Answers |
 |---|---|---|
-| `FF00/0001` | 7 bytes in / 7 out | answers HID++ requests |
-| `FF00/0002` | 20 bytes in / 20 out | never answered on this machine |
+| `FF00/0001` | 7 bytes in / 7 out | receiver-level HID++ 1.0 registers |
+| `FF00/0002` | 20 bytes in / 20 out | device-level HID++ 2.0 requests |
 
-Requests are written with `WriteFile` and replies read with `ReadFile` on an
-overlapped handle. The 7-byte collection uses report id `0x10`; the 20-byte one
-would use `0x11`. Only the 7-byte path is implemented.
+The device never answered a 7-byte request; the same request sent as a 20-byte
+long report was answered immediately. The receiver itself answers on the short
+collection. So: **receiver registers → short, device features → long**, and the
+implementation simply tries short first and falls back to long.
 
-Reads must be filtered: unsolicited notifications and late replies from earlier
-requests arrive on the same pipe. A reply is accepted only when its device byte
-matches the request.
+Opening the mouse and keyboard collections (`0001/0002`, `0001/0006`) fails with
+`ERROR_ACCESS_DENIED` because the Windows input stack owns them. This is
+expected and irrelevant: battery data lives on the vendor collection.
 
 ## Frame layout
 
 ```
 request       [0]=report id  [1]=device  [2]=feature/register  [3]=function/address  [4..]=params
 reply, ok     [0]            [1]=device  [2]=feature/register  [3]=function/address  [4..]=params
-reply, error  [0]            [1]=device  [2]=0x8F              [3]=feature/register  [4]=function/address  [5]=code
+reply, error  [0]            [1]=device  [2]=0x8F  [3]=echo of [2]  [4]=echo of [3]  [5]=code
 ```
-
-The device byte is the receiver itself for `0xFF`, or the paired-device slot for
-`0x01`..`0x06`.
 
 Captured frames:
 
 | Frame | Meaning |
 |---|---|
-| `10 FF 8F 00 10 01 00` | receiver rejects HID++ 2.0 root `GetProtocolVersion`, code `0x01` invalid sub-id |
-| `10 01 8F 00 10 08 00` | slot 1 answers `0x08` unknown device — empty slot, or the device is asleep |
-| `10 FF 81 02 00 01 00 00` | HID++ 1.0 read of register `0x02` |
+| `10 01 41 11 A2 93 40` | unsolicited notification from device 1 after the wake request |
+| `10 01 8F 81 0D 01 00` | register read rejected: `0x01` invalid sub-id — the device has no 1.0 registers |
+| `10 02 8F 00 10 08 00` | slot 2: `0x08` unknown device (empty slot) |
+| `11 01 00 10 04 02` | long ping reply: device 1 speaks HID++ **4.2** |
+| `11 01 00 00 06 00 03` | `GetFeature(0x1004)` → feature index `6`, type `0`, version `3` |
+| `11 01 06 00 0F 07 01 00` | `0x1004` function 0 → payload `0F 07 01 00` |
 
 Error codes: `0x01` invalid sub-id, `0x02` invalid address, `0x07` busy,
 `0x08` unknown device, `0x09` resource error, `0x0B` unsupported parameter.
 
+## Slot scanning
+
+The receiver forwards to paired devices on slots `0x01`..`0x06`, and answers
+`0x08` immediately for empty slots. That reply is definitive, so the scan can
+skip a slot without trying anything else. A sleeping device instead produces
+**silence**, which is why every request needs a time budget of roughly 1.5 s
+rather than a single read timeout.
+
+## Battery feature 0x1004
+
+`GetFeature(0x1004)` returned index `6`; function `0` then returned
+`0F 07 01 00`. The mouse reported 70% and was not on any kind of power cable.
+
+| Byte | Value | Interpretation |
+|---|---|---|
+| `[0]` | `0x0F` = 15 | state of charge per the feature table — **contradicts reality** |
+| `[1]` | `0x07` | battery level 0..10 → **70%**, matches reality |
+| `[2]` | `0x01` | charging status — an AA-powered mouse cannot charge |
+| `[3]` | `0x00` | external power |
+
+So the implementation reads `[1] * 10` and only falls back to `[0]` when `[1]`
+is outside 0..10. The status bytes are ignored: a device without a charging
+circuit still reports `01 00`, so surfacing "charging" from them would be wrong.
+
+The cost of this choice is granularity: a 0..10 level only moves in 10% steps.
+If a later device reports a plausible state-of-charge byte and a level that
+disagrees, the two must be compared against a known battery reading before
+either is trusted.
+
 ## HID++ 1.0 registers
 
-Only the receiver index (`0xFF`) answered register reads here.
+Only the receiver index (`0xFF`) answered register reads.
 
 | Direction | Sub-id | Address |
 |---|---|---|
 | read | `0x81` | register |
 | write | `0x80` | register |
 
-Register `0x02` (connection state) returned payload `00 01 00 00` while no device
-was connected. **Assumed:** the first byte is the connected device count and the
-second the slot limit. Not confirmed — needs a capture taken with a device awake,
-where the first byte is expected to change.
-
-Known registers used by other clients: `0x07` battery status, `0x0D` battery
-charge, `0x02` connection state, `0x2B5` receiver info (long register, unreachable
-here because the 20-byte collection does not answer).
-
-## HID++ 2.0 features
-
-Feature index `0x00` is the root feature.
-
-| Function | Purpose | Params |
-|---|---|---|
-| `0x01` | `GetProtocolVersion` | none |
-| `0x00` | `GetFeature` | 2-byte feature id |
-
-Battery features:
-
-| Id | Name | Read payload |
-|---|---|---|
-| `0x1004` | unified battery | `[state of charge %, level, charging status, external power]` |
-| `0x1000` | battery level status | `[level %, level status, external power status]` |
-| `0x1001` | battery voltage | millivolts |
-
-`0x1004` is queried first, then `0x1000`, then `0x1001` (voltage is not converted
-to a percentage yet, so it only appears in `--verbose`).
-
-**Assumed:** byte offsets inside the `0x1004` and `0x1000` payloads, and the
-meaning of the charging bytes. Both parsers reject values above 100 so a wrong
-offset shows up as `unknown` instead of a plausible-looking wrong number.
+Register `0x02` (connection state) returns payload `00 01 00`. **Assumed:** the
+first byte is the connected count and the second the slot limit. Writing `0x02`
+triggers the receiver to ping its paired devices — that is what produced the
+notification in the table above.
 
 ## Verified vs assumed
 
 | Item | Status |
 |---|---|
-| Enumerating the receiver's vendor collections | verified |
-| Short-report request/response round trip | verified |
-| Error frame decoding | verified against two captured frames |
-| Slot scan (`0x01`..`0x06`) | verified — all slots answered `0x08` |
-| Reading a battery level | **not verified** — no device was awake during development |
+| Receiver answers 1.0 registers on the short collection | verified |
+| Device answers 2.0 requests only as long reports | verified |
+| Error frame echo layout | verified against three captures |
+| Slot scan and the `0x08` empty-slot reply | verified |
+| Feature discovery and `0x1004` read | verified |
+| Battery percentage from `0x1004` byte 1 | verified against a known 70% |
+| `0x1004` byte 0 and the status bytes | unclear, deliberately unused |
 | Register `0x02` byte layout | assumed |
-| `0x1004` / `0x1000` payload offsets | assumed |
 | Bolt (encrypted) receivers | not investigated |
-
-The first run against an awake device should be:
-
-```
-battery_status.exe --dump --verbose --raw
-```
-
-The `--raw` output contains the exact reply bytes and is enough to correct any
-assumption above.
+| HID++ 1.0 battery registers `0x07` / `0x0D` | implemented, never answered by this device |

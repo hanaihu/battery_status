@@ -60,12 +60,26 @@ BatteryInfo ParseBatteryLevelStatus(const unsigned char* params, int count) {
 BatteryInfo ParseUnifiedBattery(const unsigned char* params, int count) {
     BatteryInfo info;
     if (params == nullptr || count < 4) return info;
-    if (params[0] > 100) return info;
-    info.valid = true;
-    info.percent = params[0];
-    // Byte 2: 0 = discharging, 1 = charging, 2 = charge complete, 3 = charged.
-    info.charging = params[2] != 0;
-    info.externalPower = params[3] != 0;
+
+    // Layout assumed from the HID++ 2.0 feature table:
+    //   [0] state of charge, [1] battery level 0..10, [2] charging, [3] external power
+    //
+    // Measured on a 046D:C547 receiver with an AA-powered mouse the payload was
+    // 0F 07 01 00 while the actual charge was 70%: byte 0 would have said 15%.
+    // Byte 1 (7 -> 70%) is the value that matched, so it is preferred and the
+    // state-of-charge byte is only a fallback. The status bytes cannot be
+    // distrusted more: a device with no charging circuit still reports 01 00,
+    // so charging stays false rather than being shown from those bytes.
+    const int level = params[1];
+    if (level >= 0 && level <= 10) {
+        info.valid = true;
+        info.percent = level * 10;
+        return info;
+    }
+    if (params[0] <= 100) {
+        info.valid = true;
+        info.percent = params[0];
+    }
     return info;
 }
 

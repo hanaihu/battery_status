@@ -73,21 +73,22 @@ void TestBatteryLevelStatus() {
 }
 
 void TestUnifiedBattery() {
-    const unsigned char idle[] = {72, 0x06, 0x00, 0x00};
-    hidpp::BatteryInfo info = hidpp::ParseUnifiedBattery(idle, sizeof(idle));
-    Check(info.valid && info.percent == 72, "0x1004 level");
-    Check(!info.charging, "0x1004 discharging");
-    Check(!info.externalPower, "0x1004 no external power");
+    // Real capture from an AA-powered mouse that was at 70% when read.
+    // Byte 0 would have meant 15%, byte 1 is the 0..10 level that matches.
+    const unsigned char captured[] = {0x0F, 0x07, 0x01, 0x00};
+    hidpp::BatteryInfo info = hidpp::ParseUnifiedBattery(captured, sizeof(captured));
+    Check(info.valid && info.percent == 70, "0x1004 reads the level byte as 10% steps");
+    Check(!info.charging, "0x1004 status bytes are not trusted as charging");
 
-    const unsigned char charging[] = {72, 0x06, 0x01, 0x01};
-    info = hidpp::ParseUnifiedBattery(charging, sizeof(charging));
-    Check(info.charging && info.externalPower, "0x1004 charging");
+    // A level above 10 cannot be a level, so the state-of-charge byte is used.
+    const unsigned char fallback[] = {0x45, 0xFF, 0x00, 0x00};
+    info = hidpp::ParseUnifiedBattery(fallback, sizeof(fallback));
+    Check(info.valid && info.percent == 0x45, "0x1004 falls back to state of charge");
 
-    const unsigned char complete[] = {100, 0x0A, 0x02, 0x01};
-    info = hidpp::ParseUnifiedBattery(complete, sizeof(complete));
-    Check(info.valid && info.percent == 100 && info.charging, "0x1004 full");
+    const unsigned char impossible[] = {200, 0xFF, 0x00, 0x00};
+    Check(!hidpp::ParseUnifiedBattery(impossible, 4).valid, "0x1004 rejects out-of-range payloads");
 
-    Check(!hidpp::ParseUnifiedBattery(idle, 3).valid, "0x1004 rejects short payload");
+    Check(!hidpp::ParseUnifiedBattery(captured, 3).valid, "0x1004 rejects short payload");
 }
 
 }  // namespace

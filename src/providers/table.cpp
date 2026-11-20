@@ -16,9 +16,12 @@ DeviceKind KindFromCollections(const PollContext& ctx, unsigned short vendorId, 
     for (const auto& c : ctx.collections) {
         if (c.vendorId != vendorId || c.productId != productId) continue;
         if (c.usagePage != 0x0001) continue;  // Generic Desktop
-        if (c.usage == 0x0002) mouse = true;  // Mouse
+        if (c.usage == 0x0002) mouse = true;   // Mouse
         if (c.usage == 0x0006) keyboard = true;  // Keyboard
     }
+    // Combo receivers expose both, so a product-level guess would be a lie:
+    // report "unknown" and let the UI use a generic icon.
+    if (mouse && keyboard) return DeviceKind::Other;
     if (keyboard) return DeviceKind::Keyboard;
     if (mouse) return DeviceKind::Mouse;
     return DeviceKind::Other;
